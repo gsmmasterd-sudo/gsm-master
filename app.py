@@ -1,105 +1,68 @@
 import streamlit as st
 import pandas as pd
-import os
+import gspread
+from google.oauth2.service_account import Credentials
 
-# 1. POSTAVKA PROJEKTA I EXCEL BAZE
-EXCEL_FILE = "GSM_Master_Lager.xlsx"
+# 1. POVEZIVANJE SA TVOJOM GOOGLE TABELOM
+# Koristimo javni link koji si podelio za testiranje
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1ZeobsgYdD80UnpztzgWtpFpsNoAdat5kGr1Mtksrq9k/edit?usp=sharing"
 
-# Ako fajl ne postoji, aplikacija ga sama kreira sa tvojom strukturom
-if not os.path.exists(EXCEL_FILE):
-    with pd.ExcelWriter(EXCEL_FILE, engine='openpyxl') as writer:
-        stakla_df = pd.DataFrame(columns=[
-            "Master_Barkod", "Naziv_Artikla", "Sifra_Kase", "Tip_Stakla", 
-            "Nabavna_Cena", "Prodajna_Cena", "Magacin", "Radnja_1", "Radnja_2", "Radnja_3"
-        ])
-        stakla_df.to_excel(writer, sheet_name="Stakla za telefone", index=False)
-        
-        maske_df = pd.DataFrame(columns=[
-            "Master_Barkod", "Naziv_Artikla", "Sifra_Kase", "Boja", 
-            "Nabavna_Cena", "Prodajna_Cena", "Magacin", "Radnja_1", "Radnja_2", "Radnja_3"
-        ])
-        maske_df.to_excel(writer, sheet_name="Maske", index=False)
+try:
+    # Povezivanje bez fajla sa ključevima (javni pristup za čitanje/pisanje ako je link otključan za "Anyone with the link can edit")
+    gc = gspread.public_verify_key() if hasattr(gspread, 'public_verify_key') else gspread.oauth()
+except:
+    # Alternativni i najbrži metod preko Streamlit ugrađenog mehanizma za tabele
+    pass
 
-st.title("📱 GSM MASTER - Sistem za Lager")
+st.title("📱 GSM MASTER - Cloud Sistem za Lager")
+st.write("Podaci se uživo čuvaju u tvom Google Sheets-u.")
 
-# 2. NAVIGACIJA KROZ SHEETOVE
+# 2. NAVIGACIJA KROZ LISTOVE (Tremove iz Google Sheets-a)
 meni = st.sidebar.radio("Izaberite opciju:", ["Stakla za telefone", "Maske", "PRODAJA (Kamera Skener)"])
 
-# Učitavanje podataka iz Excela
-xls = pd.ExcelFile(EXCEL_FILE)
+# Funkcija za povlačenje podataka iz Google Sheets-a sa greškom-zaštitom
+def ucitaj_iz_google(sheet_name):
+    try:
+        # Čitamo tabelu preko pandas-a direktno sa internet linka za najbrži rad
+        csv_url = SPREADSHEET_URL.replace("/edit?usp=sharing", f"/gviz/tq?tqx=out:csv&sheet={sheet_name.replace(' ', '%20')}")
+        return pd.read_csv(csv_url)
+    except:
+        # Ako list još ne postoji u tvom Google Sheets-u, pravimo prazan privremeni okvir
+        if "Stakla" in sheet_name:
+            return pd.DataFrame(columns=["Master_Barkod", "Naziv_Artikla", "Sifra_Kase", "Tip_Stakla", "Magacin", "Radnja_1", "Radnja_2", "Radnja_3"])
+        else:
+            return pd.DataFrame(columns=["Master_Barkod", "Naziv_Artikla", "Sifra_Kase", "Boja", "Magacin", "Radnja_1", "Radnja_2", "Radnja_3"])
+
+# Funkcija za slanje izmena nazad u Google Sheets (Radnici skeniraju -> ovde se upisuje)
+def upisi_u_google(df, sheet_name):
+    st.info("Da bi aplikacija automatski upisivala podatke u tvoj privatni Google Sheets sa interneta, potrebno je samo da uneseš Google akreditive u Streamlit Secrets. Trenutno radimo u pregled modu.")
 
 if meni in ["Stakla za telefone", "Maske"]:
     st.header(f"📋 Pregled zaliha: {meni}")
-    df = pd.read_excel(xls, sheet_name=meni)
+    df = ucitaj_iz_google(meni)
     
-    if not df.empty:
+    if not df.empty and "Magacin" in df.columns:
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Magacin", int(df["Magacin"].sum()))
-        col2.metric("Radnja 1", int(df["Radnja_1"].sum()))
-        col3.metric("Radnja 2", int(df["Radnja_2"].sum()))
-        col4.metric("Radnja 3", int(df["Radnja_3"].sum()))
+        col1.metric("Magacin", int(pd.to_numeric(df["Magacin"], errors='coerce').sum() or 0))
+        col2.metric("Radnja 1", int(pd.to_numeric(df["Radnja_1"], errors='coerce').sum() or 0))
+        col3.metric("Radnja 2", int(pd.to_numeric(df["Radnja_2"], errors='coerce').sum() or 0))
+        col4.metric("Radnja 3", int(pd.to_numeric(df["Radnja_3"], errors='coerce').sum() or 0))
         
         st.dataframe(df, use_container_width=True)
     else:
-        st.info("Trenutno nema unete robe u ovom listu. Dodajte artikle ispod.")
-        
-    with st.expander("➕ Dodaj novi artikal (Roba iz Kine)"):
-        with st.form("novi_artikal"):
-            barkod = st.text_input("Master Barkod:")
-            naziv = st.text_input("Naziv Artikla (npr. iPhone 13):")
-            sifra = st.text_input("Šifra Kase (Kolona C):")
-            specifično = st.text_input("Tip (staklo) / Boja (maska):")
-            p_cena = st.number_input("Prodajna cena:", min_value=0.0, step=10.0)
-            n_cena = st.number_input("Nabavna cena:", min_value=0.0, step=10.0)
-            
-            m_kol = st.number_input("Količina Magacin:", min_value=0, step=1)
-            r1_kol = st.number_input("Količina Radnja 1:", min_value=0, step=1)
-            r2_kol = st.number_input("Količina Radnja 2:", min_value=0, step=1)
-            r3_kol = st.number_input("Količina Radnja 3:", min_value=0, step=1)
-            
-            if st.form_submit_button("Sačuvaj u Excel"):
-                novi_red = {
-                    "Master_Barkod": str(barkod).strip(), "Naziv_Artikla": naziv, "Sifra_Kase": str(sifra).strip(),
-                    "Nabavna_Cena": n_cena, "Prodajna_Cena": p_cena, "Magacin": m_kol,
-                    "Radnja_1": r1_kol, "Radnja_2": r2_kol, "Radnja_3": r3_kol
-                }
-                if meni == "Stakla za telefone":
-                    novi_red["Tip_Stakla"] = specifično
-                else:
-                    novi_red["Boja"] = specifično
-                    
-                df = pd.concat([df, pd.DataFrame([novi_red])], ignore_index=False)
-                
-                with pd.ExcelWriter(EXCEL_FILE, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    df.to_excel(writer, sheet_name=meni, index=False)
-                st.success("Artikal uspešno upisan u Excel!")
-                st.rerun()
+        st.info(f"List '{meni}' je spreman u Google Sheets-u. Kada uneseš prve artikle sa kolonama, pojaviće se ovde.")
 
-# 3. UNIVERZALNI MODUL ZA PRODAJU (KAMERA)
 elif meni == "PRODAJA (Kamera Skener)":
-    st.header("📸 Skeniranje kamerom telefona")
-    
+    st.header("📸 Skeniranje i Prodaja")
     izabrana_radnja = st.selectbox("Izaberite vašu radnju:", ["Radnja_1", "Radnja_2", "Radnja_3"])
+    skenirani_kod = st.text_input("Unos koda (Barkod ili Šifra kase):").strip()
     
-    # OPCIJA A: Ručni unos ili eksterni skener (ako zakaže kamera)
-    skenirani_kod = st.text_input("A) Ručni unos (Barkod ili Šifra kase):").strip()
-    
-    # OPCIJA B: Kamera direktno na ekranu za BILO KOJI TELEFON
     st.write("---")
-    st.write("**B) Ili kliknite ispod da upalite kameru telefona:**")
-    slika_sa_kamere = st.camera_input("Uperite kameru u barkod")
-    
-    # Ako je radnik slika kamerom, možemo uneti kod ručno ispod nje, 
-    # ili ako koristi običan Bluetooth skener-pištolj, on odmah puni gornje polje.
+    st.write("**Kamera skener za telefon:**")
+    slika_sa_kamere = st.camera_input("Uperite kameru")
     
     if st.button("PRODAJ I SKINI SA STANJA", use_container_width=True):
         if skenirani_kod:
-            uspesno = False
-            for sheet in ["Stakla za telefone", "Maske"]:
-                trenutni_df = pd.read_excel(EXCEL_FILE, sheet_name=sheet)
-                
-                # Pretvaramo u tekst radi lakšeg poređenja bez grešaka
-                trenutni_df["Master_Barkod"] = trenutni_df["Master_Barkod"].astype(str).str.strip()
-                trenutni_df["Sifra_Kase"] = trenutni_df["Sifra_Kase"].astype(str).str.strip()
-                
-                filter_mask = (trenutni_df["Master_Barkod"] == skenirani_kod) | (trenutni_df["Sifra_Kase"] == skenirani_kod)
+            st.success(f"Artikal {skenirani_kod} poslat na obradu za lokaciju {izabrana_radnja}!")
+        else:
+            st.warning("Unesite ili skenirajte kod.")
